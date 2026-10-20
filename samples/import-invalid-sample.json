@@ -1,0 +1,19 @@
+{
+  "format": "nyuri-log",
+  "schemaVersion": 1,
+  "items": [
+    { "category": "novel", "title": "使えないカテゴリー（エラー）" },
+    { "title": "category が無い（エラー）" },
+    { "category": "memo" },
+    "文字列だけの要素（エラー）",
+    {
+      "category": "app",
+      "title": "警告つきで取り込める例",
+      "madeDate": "2026年7月",
+      "status": "ベータ版",
+      "urls": ["javascript:alert(1)", "https://example.com/ok"],
+      "fields": { "publicUrl": "not a url", "version": 2, "unknownKey": "保持される" },
+      "rating": 5
+    }
+  ]
+}

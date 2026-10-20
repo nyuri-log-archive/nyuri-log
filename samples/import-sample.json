@@ -1,0 +1,80 @@
+{
+  "format": "nyuri-log",
+  "schemaVersion": 1,
+  "items": [
+    {
+      "category": "memo",
+      "title": "",
+      "body": "雨の日だけ開く古書店の話。\n店主は猫？",
+      "tags": ["プロット", "未整理"]
+    },
+    {
+      "category": "app",
+      "title": "サンプル辞典アプリ",
+      "body": "スマホで片手操作できるかを重視した。",
+      "madeDate": "2026-07-12",
+      "tags": ["ツール"],
+      "status": "公開済み",
+      "fields": {
+        "purpose": "画像生成用のタグを日本語から探す",
+        "publicUrl": "https://example.com/tag-dictionary/",
+        "githubUrl": "https://github.com/example/tag-dictionary",
+        "version": "v1.0.0",
+        "features": "検索\nお気に入り\nコピー",
+        "todo": "カテゴリー並び替え"
+      }
+    },
+    {
+      "category": "lora",
+      "title": "水彩にじみLoRA",
+      "status": "検証中",
+      "fields": {
+        "baseModel": "SDXL系",
+        "triggerWords": "watercolor bleed, soft edges",
+        "weight": "0.6〜0.8",
+        "trainingNotes": "画像40枚 / 10epoch",
+        "distributionUrl": "",
+        "verification": "1.0以上だと線が溶ける"
+      }
+    },
+    {
+      "category": "nai",
+      "title": "淡彩パステル画風",
+      "status": "完成",
+      "fields": {
+        "model": "NAI Diffusion V4.5",
+        "positivePrompt": "1girl, pastel colors, {{watercolor}}, soft lighting",
+        "negativePrompt": "lowres, bad anatomy",
+        "styleTags": "artist:sample",
+        "steps": "28",
+        "cfg": "5",
+        "sampler": "Euler Ancestral",
+        "seed": "1234567890",
+        "reproNotes": "seed固定で再現OK"
+      }
+    },
+    {
+      "category": "oc",
+      "title": "ミナ",
+      "madeDate": "2026-05-01",
+      "tags": ["和風ファンタジー"],
+      "status": "設定中",
+      "urls": [{ "label": "キャラシート", "url": "https://example.com/mina" }],
+      "fields": {
+        "aliases": "書庫の番人",
+        "age": "24",
+        "gender": "女性",
+        "appearance": "銀髪、灰色の目",
+        "personality": "物静かで観察好き",
+        "background": "王立書庫で育った",
+        "world": "四部族の国・ヨミ",
+        "profileFull": "名前：ミナ\n年齢：24\n……"
+      }
+    },
+    {
+      "category": "other",
+      "title": "剣道部の創作ネタ集",
+      "body": "形の名前を技名に転用する案"
+    }
+  ]
+}

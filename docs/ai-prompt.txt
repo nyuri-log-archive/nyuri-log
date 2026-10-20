@@ -1,0 +1,133 @@
+次の情報を、にゅりログ（私の創作管理アプリ）に取り込めるJSONに変換してください。
+
+# 出力ルール
+- JSONだけを、コードブロック1つで出力してください。説明文は不要です。
+- 一番外側は次の形にします：
+  { "format": "nyuri-log", "schemaVersion": 1, "items": [ … ] }
+- items の各要素は1件の記録です。複数件をまとめて入れて構いません。
+- 分からない項目は "" にするか、省略してください。推測で埋めないでください。
+- 特に URL・日付は、私が書いた情報にあるものだけを入れてください。存在しそうなURLを作らないでください。
+- 画像は含めないでください（取り込み後にアプリで追加します）。
+- 文字列の中の改行は \n で表してください。
+
+# items の共通項目
+- category（必須）："memo" / "app" / "lora" / "nai" / "oc" / "other" のどれか
+- title：タイトル（カテゴリーによって意味が変わります。下記参照）
+- body：本文・自由メモ
+- madeDate：制作日・着想日。"YYYY-MM-DD" 形式。分からなければ null
+- tags：タグの配列（例：["和風", "検証中"]）
+- status：ステータス（カテゴリーごとの候補から選ぶ。分からなければ省略）
+- favorite：お気に入りなら true
+- urls：その他の関連URLの配列。[{ "label": "説明", "url": "https://…" }]
+- fields：カテゴリー専用項目（下記のキー名をそのまま使う。値はすべて文字列）
+
+# カテゴリーと fields のキー
+- "memo" … 思いつきメモ
+  - title の意味：タイトル
+  - status の候補：未整理 / 整理済み / 保留
+  - fields：
+    （専用項目なし。title と body を使う）
+- "app" … Webアプリ
+  - title の意味：アプリ名
+  - status の候補：構想中 / 制作中 / 公開済み / 改修中 / 保留
+  - fields：
+    - purpose：説明・用途
+    - publicUrl：公開URL
+    - githubUrl：GitHub URL
+    - version：バージョン
+    - features：主な機能
+    - todo：改善予定・不具合メモ
+- "lora" … LoRA
+  - title の意味：LoRA名
+  - status の候補：構想中 / 学習中 / 検証中 / 公開済み / 保留
+  - fields：
+    - baseModel：対応モデル
+    - triggerWords：トリガーワード
+    - weight：推奨強度
+    - trainingNotes：学習・設定メモ
+    - distributionUrl：公開・配布URL
+    - verification：検証結果・注意点
+- "nai" … NAI画風・プロンプト
+  - title の意味：プロンプト名・画風名
+  - status の候補：実験中 / 完成 / 保留
+  - fields：
+    - model：使用モデル
+    - positivePrompt：ポジティブプロンプト
+    - negativePrompt：ネガティブプロンプト
+    - styleTags：追加画風タグ
+    - steps：Steps
+    - cfg：CFG（Guidance）
+    - sampler：Sampler
+    - seed：Seed
+    - otherSettings：その他の生成設定
+    - reproNotes：再現条件・実験メモ
+- "oc" … OC
+  - title の意味：キャラクター名
+  - status の候補：構想中 / 設定中 / 完成 / 保留
+  - fields：
+    - aliases：別名
+    - age：年齢
+    - gender：性別
+    - appearance：外見
+    - personality：性格
+    - background：背景設定
+    - world：世界観・所属
+    - profileFull：キャラクタープロフィール全文
+- "other" … その他
+  - title の意味：タイトル
+  - status の候補：未整理 / 進行中 / 完了 / 保留
+  - fields：
+    （専用項目なし。title と body を使う）
+
+# 出力例
+```json
+{
+  "format": "nyuri-log",
+  "schemaVersion": 1,
+  "items": [
+    {
+      "category": "app",
+      "title": "創作アイデアガチャ",
+      "body": "",
+      "madeDate": null,
+      "tags": [
+        "創作",
+        "ツール"
+      ],
+      "status": "公開済み",
+      "urls": [],
+      "fields": {
+        "purpose": "ランダムに創作のお題を出すWebアプリ",
+        "publicUrl": "https://example.com/idea-gacha/",
+        "githubUrl": "https://github.com/example/idea-gacha",
+        "version": "v1.0",
+        "features": "ガチャ、履歴、コピー",
+        "todo": ""
+      }
+    },
+    {
+      "category": "oc",
+      "title": "ミナ",
+      "body": "",
+      "madeDate": "2026-05-01",
+      "tags": [
+        "和風ファンタジー"
+      ],
+      "status": "設定中",
+      "fields": {
+        "aliases": "書庫の番人",
+        "age": "24",
+        "gender": "女性",
+        "appearance": "銀髪、灰色の目",
+        "personality": "物静かで観察好き",
+        "background": "",
+        "world": "",
+        "profileFull": ""
+      }
+    }
+  ]
+}
+```
+
+# 変換してほしい情報
+（ここに制作物の情報を貼ってください）
