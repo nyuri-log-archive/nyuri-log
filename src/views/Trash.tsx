@@ -1,7 +1,7 @@
 import { useRecords } from '../ui/hooks';
 import { deletePermanently, emptyTrash, restoreFromTrash } from '../db/repo';
 import { useFeedback } from '../components/Feedback';
-import { Thumb } from '../components/Images';
+import { Thumb, coverRef } from '../components/Images';
 import { CategoryBadge, displayTitle } from '../components/RecordCard';
 import { formatDateTime } from '../lib/util';
 import { href } from '../ui/router';
@@ -52,7 +52,7 @@ export function TrashView() {
           <div className="stack">
             {trashed.map((r) => (
               <div key={r.id} className="row trash-row">
-                <Thumb id={r.coverImageId} category={r.category} alt={displayTitle(r)} small />
+                <Thumb img={coverRef(r)} category={r.category} alt={displayTitle(r)} small />
                 <div className="row-main">
                   <a className="row-title" href={href(`/r/${r.id}`)}>
                     {displayTitle(r)}

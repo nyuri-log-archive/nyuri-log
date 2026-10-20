@@ -3,7 +3,7 @@ import { CATEGORY_DEFS } from '../lib/categories';
 import { formatDate, formatYmd } from '../lib/util';
 import { href } from '../ui/router';
 import { Icon } from './Icon';
-import { Thumb } from './Images';
+import { Thumb, coverRef } from './Images';
 
 export function StatusBadge({ r }: { r: RecordItem }) {
   if (!r.status) return <span className="badge badge-muted">未設定</span>;
@@ -28,7 +28,7 @@ export function RecordCard({ r, showCategory }: { r: RecordItem; showCategory?: 
   const d = CATEGORY_DEFS[r.category];
   return (
     <a className="card" href={href(`/r/${r.id}`)} style={{ ['--cat' as string]: d.color, ['--cat-strong' as string]: d.colorStrong }}>
-      <Thumb id={r.coverImageId} category={r.category} alt={displayTitle(r)} />
+      <Thumb img={coverRef(r)} category={r.category} alt={displayTitle(r)} shape="auto" />
       <div className="card-body">
         <div className="card-title">
           {r.favorite && <Icon name="star" size={14} filled className="fav-mark" />}
@@ -67,7 +67,7 @@ export function RecordRow({ r, showCategory = true }: { r: RecordItem; showCateg
   const d = CATEGORY_DEFS[r.category];
   return (
     <a className="row" href={href(`/r/${r.id}`)} style={{ ['--cat' as string]: d.color, ['--cat-strong' as string]: d.colorStrong }}>
-      <Thumb id={r.coverImageId} category={r.category} alt={displayTitle(r)} small />
+      <Thumb img={coverRef(r)} category={r.category} alt={displayTitle(r)} small />
       <div className="row-main">
         <div className="row-title">
           {r.favorite && <Icon name="star" size={13} filled className="fav-mark" />}

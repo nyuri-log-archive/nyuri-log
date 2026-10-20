@@ -6,10 +6,13 @@ import {
   type AppSettings,
   type AppState,
   type HistoryEntry,
+  type ImageCrop,
   type ImageMeta,
+  type ImageRef,
   type RecordItem,
 } from './types';
 import { CATEGORY_DEFS, type Category } from '../lib/categories';
+import { isValidCropRef, normalizeRect } from '../lib/crop';
 import { autoTitle, uniqueTags, uuid } from '../lib/util';
 
 // ---------- 記録の生成 ----------
@@ -42,7 +45,14 @@ export function newRecord(category: Category, partial: Partial<RecordItem> = {})
 
 /** 保存前の整形（タグの重複除去、空URL除去、代表画像の整合など） */
 export function normalizeRecord(r: RecordItem): RecordItem {
-  const images = r.images.filter((im, i, arr) => im && im.id && arr.findIndex((x) => x.id === im.id) === i);
+  const images = r.images
+    .filter((im, i, arr) => im && im.id && arr.findIndex((x) => x.id === im.id) === i)
+    .map((im) => {
+      // 不正なトリミング情報は捨てて、従来のサムネイル表示に戻す（画像そのものは残す）
+      if (im.crop === undefined) return im;
+      const { crop, ...rest } = im;
+      return isValidCropRef(crop) ? { ...rest, crop: { ...crop, ...normalizeRect(crop) } } : rest;
+    });
   const cover = r.coverImageId && images.some((im) => im.id === r.coverImageId) ? r.coverImageId : images[0]?.id ?? null;
   const fields: Record<string, string> = {};
   for (const [k, v] of Object.entries(r.fields ?? {})) {
@@ -180,7 +190,7 @@ async function pruneHistory(recordId: string, limit: number): Promise<string[]> 
   if (excess <= 0) return [];
   const remove = all.slice(0, excess);
   await db.history.bulkDelete(remove.map((h) => h.id));
-  return remove.flatMap((h) => h.snapshot.images.map((i) => i.id));
+  return remove.flatMap((h) => imageRefIds(h.snapshot.images));
 }
 
 export async function listHistory(recordId: string): Promise<HistoryEntry[]> {
@@ -249,7 +259,7 @@ export async function deletePermanently(ids: string[]): Promise<void> {
         if (!r) continue;
         if (!r.deletedAt) throw new Error('ゴミ箱に入っていない記録は完全削除できません。');
         const hs = await db.history.where('recordId').equals(id).toArray();
-        candidates.push(...r.images.map((i) => i.id), ...hs.flatMap((h) => h.snapshot.images.map((i) => i.id)));
+        candidates.push(...imageRefIds(r.images), ...hs.flatMap((h) => imageRefIds(h.snapshot.images)));
         await db.history.bulkDelete(hs.map((h) => h.id));
         await db.records.delete(id);
       }
@@ -270,15 +280,27 @@ export async function emptyTrash(): Promise<number> {
 
 // ---------- 画像の参照管理 ----------
 
-/** いずれかの記録・履歴・下書きから参照されている画像ID */
+/** 画像参照から、画像IDと切り抜きサムネイルIDをすべて取り出す */
+export function imageRefIds(images: ImageRef[] | undefined | null): string[] {
+  const out: string[] = [];
+  for (const i of images ?? []) {
+    if (!i?.id) continue;
+    out.push(i.id);
+    if (i.crop?.id) out.push(i.crop.id);
+  }
+  return out;
+}
+
+/** いずれかの記録・履歴・下書きから参照されている画像ID・切り抜きサムネイルID */
 export async function referencedImageIds(): Promise<Set<string>> {
   const db = getDB();
   const set = new Set<string>();
-  await db.records.each((r) => r.images.forEach((i) => set.add(i.id)));
-  await db.history.each((h) => h.snapshot.images.forEach((i) => set.add(i.id)));
+  const add = (images: ImageRef[] | undefined | null) => imageRefIds(images).forEach((id) => set.add(id));
+  await db.records.each((r) => add(r.images));
+  await db.history.each((h) => add(h.snapshot.images));
   await db.drafts.each((d) => {
-    const f = d.form as { record?: { images?: { id: string }[] } } | null;
-    f?.record?.images?.forEach((i) => set.add(i.id));
+    const f = d.form as { record?: { images?: ImageRef[] } } | null;
+    add(f?.record?.images);
   });
   return set;
 }
@@ -286,30 +308,46 @@ export async function referencedImageIds(): Promise<Set<string>> {
 export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /**
- * 参照されていない画像を消す。
+ * 参照されていない画像・切り抜きサムネイルを消す。
  * - candidates を指定した場合：その中で参照が無くなったものだけ消す
- * - 指定しない場合：作成から24時間以上たった孤立画像だけ消す（編集途中の画像を守るため）
+ * - 指定しない場合：作成から24時間以上たった孤立データだけ消す（編集途中のデータを守るため）
+ * 元画像を消すときは、その画像から作った切り抜きサムネイルも一緒に消す。
  */
 export async function gcImages(opts: { candidates?: string[]; now?: number } = {}): Promise<number> {
   const db = getDB();
   try {
-    return await db.transaction('rw', [db.records, db.history, db.drafts, db.images, db.imageFull, db.imageThumb, db.imageOriginal], async () => {
-      const refs = await referencedImageIds();
-      let targets: string[];
-      if (opts.candidates) {
-        targets = opts.candidates.filter((id) => !refs.has(id));
-      } else {
-        const now = opts.now ?? Date.now();
-        const metas = await db.images.toArray();
-        targets = metas.filter((m) => !refs.has(m.id) && now - m.createdAt > ORPHAN_GRACE_MS).map((m) => m.id);
-      }
-      if (!targets.length) return 0;
-      await db.images.bulkDelete(targets);
-      await db.imageFull.bulkDelete(targets);
-      await db.imageThumb.bulkDelete(targets);
-      await db.imageOriginal.bulkDelete(targets);
-      return targets.length;
-    });
+    return await db.transaction(
+      'rw',
+      [db.records, db.history, db.drafts, db.images, db.imageFull, db.imageThumb, db.imageOriginal, db.imageCrop],
+      async () => {
+        const refs = await referencedImageIds();
+        let imageTargets: string[];
+        let cropTargets: string[];
+        if (opts.candidates) {
+          const unref = [...new Set(opts.candidates)].filter((id) => !refs.has(id));
+          const imgSet = new Set(await db.images.where('id').anyOf(unref).primaryKeys());
+          imageTargets = unref.filter((id) => imgSet.has(id));
+          cropTargets = unref.filter((id) => !imgSet.has(id));
+        } else {
+          const now = opts.now ?? Date.now();
+          const metas = await db.images.toArray();
+          imageTargets = metas.filter((m) => !refs.has(m.id) && now - m.createdAt > ORPHAN_GRACE_MS).map((m) => m.id);
+          const crops = await db.imageCrop.toCollection().toArray();
+          cropTargets = crops.filter((c) => !refs.has(c.id) && now - c.createdAt > ORPHAN_GRACE_MS).map((c) => c.id);
+        }
+        if (imageTargets.length) {
+          const derived = await db.imageCrop.where('sourceId').anyOf(imageTargets).primaryKeys();
+          cropTargets.push(...derived.filter((id) => !refs.has(id)));
+          await db.images.bulkDelete(imageTargets);
+          await db.imageFull.bulkDelete(imageTargets);
+          await db.imageThumb.bulkDelete(imageTargets);
+          await db.imageOriginal.bulkDelete(imageTargets);
+        }
+        cropTargets = [...new Set(cropTargets)];
+        if (cropTargets.length) await db.imageCrop.bulkDelete(cropTargets);
+        return imageTargets.length + cropTargets.length;
+      },
+    );
   } catch (e) {
     throw toStorageError(e, '画像の整理');
   }
@@ -349,6 +387,32 @@ export async function getImageBlob(id: string, kind: 'thumb' | 'full' | 'origina
   if (!row) return null;
   const mime = kind === 'thumb' ? meta.thumbMime : kind === 'full' ? meta.mime : meta.originalMime ?? 'application/octet-stream';
   return new Blob([row.data], { type: mime });
+}
+
+/** 切り抜きサムネイルを保存する（記録の保存とは別。記録を保存しなければ24時間後に整理される） */
+export async function putCrop(crop: ImageCrop): Promise<void> {
+  try {
+    await getDB().imageCrop.put(crop);
+  } catch (e) {
+    throw toStorageError(e, 'サムネイルを保存');
+  }
+}
+
+export async function getCropBlob(id: string): Promise<Blob | null> {
+  const row = await getDB().imageCrop.get(id);
+  return row ? new Blob([row.data], { type: row.mime }) : null;
+}
+
+/**
+ * 一覧用のサムネイル。トリミングがあれば切り抜き版、無い・見つからなければ従来の縮小版。
+ * （古いデータや、切り抜き版を含まないバックアップから復元したデータでも表示できる）
+ */
+export async function getListThumbBlob(ref: Pick<ImageRef, 'id' | 'crop'>): Promise<{ blob: Blob | null; cropped: boolean }> {
+  if (ref.crop?.id) {
+    const b = await getCropBlob(ref.crop.id);
+    if (b) return { blob: b, cropped: true };
+  }
+  return { blob: await getImageBlob(ref.id, 'thumb'), cropped: false };
 }
 
 // ---------- 下書き ----------

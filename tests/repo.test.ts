@@ -219,11 +219,11 @@ describe('DBスキーマの更新', () => {
     const r = await saveRecord(newRecord('app', { title: '既存アプリ' }));
     const name = getDB().name;
     getDB().close();
-    // 将来の version(2)：索引を追加し、upgradeで項目を補完するだけ（非破壊）
+    // 将来の version(3)：索引を追加し、upgradeで項目を補完するだけ（非破壊）
     class FutureDB extends NyuriDB {
       constructor() {
         super(name);
-        this.version(2)
+        this.version(3)
           .stores({ records: 'id, category, createdAt, updatedAt, source.githubRepoId, favorite' })
           .upgrade(async (tx) => {
             await tx.table('records').toCollection().modify((x: Record<string, unknown>) => {
@@ -237,6 +237,6 @@ describe('DBスキーマの更新', () => {
     setDB(db2);
     const got = await getRecord(r.id);
     expect(got?.title).toBe('既存アプリ');
-    expect(db2.verno).toBe(2);
+    expect(db2.verno).toBe(3);
   });
 });

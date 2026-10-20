@@ -1,7 +1,7 @@
 {
   "name": "nyuri-log",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -11,7 +11,8 @@
     "typecheck": "tsc -b --noEmit",
     "icons": "python3 scripts/make_icons.py",
     "docs:json": "vite-node scripts/gen-docs.ts",
-    "e2e": "node e2e/run.mjs"
+    "e2e": "node e2e/run.mjs",
+    "e2e:upgrade": "node e2e/upgrade.mjs"
   },
   "dependencies": {
     "dexie": "^4.4.6",

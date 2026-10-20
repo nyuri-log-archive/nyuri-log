@@ -45,3 +45,31 @@ export async function fakeImage(size = 2000, seed = 1, createdAt = Date.now()): 
   await putImage({ meta, full: full.buffer as ArrayBuffer, thumb: thumb.buffer as ArrayBuffer });
   return meta;
 }
+
+/** 疑似的な切り抜きサムネイルをDBへ登録 */
+export async function fakeCrop(sourceId: string, seed = 1, createdAt = Date.now(), aspect: '1:1' | '3:4' = '1:1') {
+  const { putCrop } = await import('../src/db/repo');
+  const data = bytes(800 + seed, seed + 500);
+  const crop = {
+    id: uuid(),
+    sourceId,
+    aspect,
+    x: 0.1,
+    y: 0,
+    w: 0.5,
+    h: aspect === '1:1' ? 0.4 : 0.5,
+    mime: 'image/jpeg',
+    width: aspect === '1:1' ? 360 : 270,
+    height: 360,
+    size: data.byteLength,
+    createdAt,
+    sha256: await sha256Hex(data),
+    data: data.buffer as ArrayBuffer,
+  };
+  await putCrop(crop);
+  return crop;
+}
+
+export function cropRef(c: { id: string; aspect: '1:1' | '3:4'; x: number; y: number; w: number; h: number }) {
+  return { id: c.id, aspect: c.aspect, x: c.x, y: c.y, w: c.w, h: c.h };
+}

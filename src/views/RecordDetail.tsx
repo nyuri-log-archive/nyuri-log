@@ -4,7 +4,7 @@ import { CATEGORY_DEFS, fieldLabel } from '../lib/categories';
 import { formatDateTime, formatYmd, safeUrl } from '../lib/util';
 import { moveToTrash, restoreFromTrash, saveRecord } from '../db/repo';
 import { Icon } from '../components/Icon';
-import { ImageViewer, Thumb } from '../components/Images';
+import { FullImage, ImageViewer, Thumb } from '../components/Images';
 import { CategoryBadge, StatusBadge, displayTitle } from '../components/RecordCard';
 import { useCopy, useFeedback } from '../components/Feedback';
 import { goBack, href, navigate } from '../ui/router';
@@ -86,14 +86,15 @@ export function RecordDetail({ id }: { id: string }) {
 
       {r.images.length > 0 && (
         <div className="gallery">
+          {/* 詳細画面では切り抜かず、画像全体を表示する */}
           <button className="gallery-main" onClick={() => setViewer(Math.max(0, r.images.findIndex((i) => i.id === r.coverImageId)))} aria-label="代表画像を拡大">
-            <Thumb id={r.coverImageId} category={r.category} alt={displayTitle(r)} />
+            <FullImage id={r.coverImageId ?? r.images[0].id} category={r.category} alt={displayTitle(r)} />
           </button>
           {r.images.length > 1 && (
             <div className="gallery-strip">
               {r.images.map((im, i) => (
                 <button key={im.id} className="gallery-item" onClick={() => setViewer(i)} aria-label={`画像${i + 1}を拡大`}>
-                  <Thumb id={im.id} category={r.category} alt={im.caption || `画像${i + 1}`} small />
+                  <Thumb img={im} category={r.category} alt={im.caption || `画像${i + 1}`} small />
                   {im.caption && <span className="gallery-cap">{im.caption}</span>}
                 </button>
               ))}

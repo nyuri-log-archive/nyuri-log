@@ -1,8 +1,11 @@
 import type { Category } from '../lib/categories';
+import type { CropAspect, CropRef } from '../lib/crop';
 
 export interface ImageRef {
   id: string;
   caption: string;
+  /** サムネイル用トリミング（v1.1〜）。無ければ従来の縮小サムネイルを使う */
+  crop?: CropRef | null;
 }
 
 export interface LinkItem {
@@ -77,6 +80,25 @@ export interface ImageMeta {
   createdAt: number;
   /** 内容のSHA-256（重複・整合性確認用） */
   sha256: string;
+}
+
+/** 切り抜き済みサムネイル。編集のたびに新しいIDで作り直す（履歴の版ごとに保持するため不変） */
+export interface ImageCrop {
+  id: string;
+  /** 元画像（images テーブル）のID */
+  sourceId: string;
+  aspect: CropAspect;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  mime: string;
+  width: number;
+  height: number;
+  size: number;
+  createdAt: number;
+  sha256: string;
+  data: ArrayBuffer;
 }
 
 export interface ImageData {

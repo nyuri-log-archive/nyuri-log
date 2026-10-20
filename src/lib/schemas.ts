@@ -1,12 +1,25 @@
 import { z } from 'zod';
 import { CATEGORIES } from './categories';
+import { CROP_ASPECTS } from './crop';
 
 // バックアップ内の記録（完全なRecordItem）を検証するスキーマ。
 // 将来の項目追加に備え passthrough で未知の項目も保持する。
 
 const strDefault = z.string().catch('');
 
-export const imageRefSchema = z.object({ id: z.string().min(1), caption: z.string().catch('') }).passthrough();
+const cropRefSchema = z.object({
+  id: z.string().min(1),
+  aspect: z.enum(CROP_ASPECTS),
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+});
+
+// crop は v1.1 で追加。無い（v1.0のデータ）・壊れている場合は省いて従来のサムネイルで表示する
+export const imageRefSchema = z
+  .object({ id: z.string().min(1), caption: z.string().catch(''), crop: cropRefSchema.nullable().optional().catch(undefined) })
+  .passthrough();
 
 export const recordSchema = z
   .object({
@@ -61,6 +74,22 @@ export const imageMetaSchema = z.object({
   originalMime: z.string().nullable(),
   originalSize: z.number(),
   originalName: z.string().catch(''),
+  createdAt: z.number(),
+  sha256: z.string().catch(''),
+});
+
+export const cropMetaSchema = z.object({
+  id: z.string().min(1).regex(/^[A-Za-z0-9-]+$/),
+  sourceId: z.string().min(1),
+  aspect: z.enum(CROP_ASPECTS),
+  x: z.number(),
+  y: z.number(),
+  w: z.number(),
+  h: z.number(),
+  mime: z.string().regex(/^image\//),
+  width: z.number(),
+  height: z.number(),
+  size: z.number(),
   createdAt: z.number(),
   sha256: z.string().catch(''),
 });

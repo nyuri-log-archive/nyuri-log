@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { getImageBlob } from '../db/repo';
+import { getImageBlob, getListThumbBlob } from '../db/repo';
 import type { ImageRef } from '../db/types';
 import { CATEGORY_DEFS, type Category } from '../lib/categories';
 import { Icon } from './Icon';
@@ -63,14 +63,62 @@ export function Placeholder({ category, small }: { category: Category; small?: b
   );
 }
 
-/** 一覧用サムネイル（画面に入ったときだけ読み込む） */
-export function Thumb({ id, category, alt, small }: { id: string | null; category: Category; alt: string; small?: boolean }) {
+/** 一覧用のサムネイルURL。トリミングがあれば切り抜き版、無ければ従来の縮小版 */
+function useListThumbUrl(img: Pick<ImageRef, 'id' | 'crop'> | null, enabled: boolean): { url: string | null; missing: boolean; cropped: boolean } {
+  const [state, setState] = useState<{ url: string | null; missing: boolean; cropped: boolean }>({ url: null, missing: false, cropped: false });
+  const id = img?.id;
+  const cropId = img?.crop?.id;
+  useEffect(() => {
+    if (!id || !enabled) return;
+    let alive = true;
+    let url: string | null = null;
+    getListThumbBlob({ id, crop: cropId ? ({ id: cropId } as ImageRef['crop']) : null })
+      .then(({ blob, cropped }) => {
+        if (!alive) return;
+        if (!blob) {
+          setState({ url: null, missing: true, cropped: false });
+          return;
+        }
+        url = URL.createObjectURL(blob);
+        setState({ url, missing: false, cropped });
+      })
+      .catch(() => alive && setState({ url: null, missing: true, cropped: false }));
+    return () => {
+      alive = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [id, cropId, enabled]);
+  return state;
+}
+
+/** 記録の代表画像の参照 */
+export function coverRef(r: { images: ImageRef[]; coverImageId: string | null }): ImageRef | null {
+  return r.images.find((i) => i.id === r.coverImageId) ?? r.images[0] ?? null;
+}
+
+/**
+ * 一覧用サムネイル（画面に入ったときだけ読み込む）。
+ * shape="auto" のときは、トリミングの比率（1:1 / 3:4）に合わせた枠で表示する。
+ */
+export function Thumb({ img, category, alt, small, shape = 'square' }: { img: ImageRef | null; category: Category; alt: string; small?: boolean; shape?: 'square' | 'auto' }) {
   const [ref, seen] = useInView<HTMLDivElement>();
-  const { url, missing } = useImageUrl(id, 'thumb', seen);
+  const { url, missing, cropped } = useListThumbUrl(img, seen);
+  const tall = shape === 'auto' && img?.crop?.aspect === '3:4';
   return (
-    <div ref={ref} className={`thumb ${small ? 'small' : ''}`}>
-      {id && url ? <img src={url} alt={alt} draggable={false} /> : <Placeholder category={category} small={small} />}
-      {id && missing && <span className="thumb-missing">画像なし</span>}
+    <div ref={ref} className={`thumb ${small ? 'small' : ''} ${tall ? 'tall' : ''}`} data-cropped={cropped ? '1' : undefined}>
+      {img && url ? <img src={url} alt={alt} draggable={false} /> : <Placeholder category={category} small={small} />}
+      {img && missing && <span className="thumb-missing">画像なし</span>}
+    </div>
+  );
+}
+
+/** 画像全体（保存用画像）を、切り抜かずに表示する。詳細画面用 */
+export function FullImage({ id, alt, category }: { id: string; alt: string; category: Category }) {
+  const [ref, seen] = useInView<HTMLDivElement>();
+  const { url, missing } = useImageUrl(id, 'full', seen);
+  return (
+    <div ref={ref} className="full-image">
+      {url ? <img src={url} alt={alt} draggable={false} /> : missing ? <Placeholder category={category} /> : <div className="full-image-loading" />}
     </div>
   );
 }

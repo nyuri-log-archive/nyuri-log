@@ -92,7 +92,7 @@ export function HistoryView({ id }: { id: string }) {
                     {s.images.length > 0 && (
                       <div className="gallery-strip">
                         {s.images.map((im) => (
-                          <Thumb key={im.id} id={im.id} category={s.category} alt={im.caption} small />
+                          <Thumb key={im.id} img={im} category={s.category} alt={im.caption} small />
                         ))}
                       </div>
                     )}

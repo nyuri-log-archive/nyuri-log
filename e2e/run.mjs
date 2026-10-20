@@ -64,16 +64,24 @@ async function readDb(page) {
         r.onerror = () => rej(r.error);
         r.onsuccess = () => {
           const db = r.result;
-          const tx = db.transaction(['records', 'images', 'history', 'imageFull', 'imageThumb'], 'readonly');
-          const get = (s) => new Promise((ok) => { const q = tx.objectStore(s).getAll(); q.onsuccess = () => ok(q.result); });
-          Promise.all([get('records'), get('images'), get('history'), get('imageFull'), get('imageThumb')]).then(async ([records, images, history, full, thumb]) => {
+          const hasCrop = db.objectStoreNames.contains('imageCrop');
+          const tx = db.transaction(['records', 'images', 'history', 'imageFull', 'imageThumb', ...(hasCrop ? ['imageCrop'] : [])], 'readonly');
+          const get = (s) => new Promise((ok) => { if (s === 'imageCrop' && !hasCrop) return ok([]); const q = tx.objectStore(s).getAll(); q.onsuccess = () => ok(q.result); });
+          Promise.all([get('records'), get('images'), get('history'), get('imageFull'), get('imageThumb'), get('imageCrop')]).then(async ([records, images, history, full, thumb, crops]) => {
             const hash = async (buf) => [...new Uint8Array(await crypto.subtle.digest('SHA-256', buf))].map((x) => x.toString(16).padStart(2, '0')).join('');
             const fullHashes = {};
             for (const f of full) fullHashes[f.id] = await hash(f.data);
             const thumbSizes = {};
             for (const t of thumb) thumbSizes[t.id] = t.data.byteLength;
+            const cropHashes = {};
+            const cropInfo = {};
+            for (const c of crops) {
+              cropHashes[c.id] = await hash(c.data);
+              cropInfo[c.id] = { sourceId: c.sourceId, aspect: c.aspect, width: c.width, height: c.height, size: c.size, mime: c.mime };
+            }
+            const version = db.version;
             db.close();
-            res({ records, images, history, fullHashes, thumbSizes });
+            res({ records, images, history, fullHashes, thumbSizes, cropHashes, cropInfo, version });
           });
         };
       }),
@@ -318,6 +326,145 @@ await step('ゴミ箱へ移動・復元、再読み込み後も残る', async ()
 
 let backupPath = null;
 let beforeBackup = null;
+
+/** 2本指のピンチを PointerEvent で再現する（枠の中心付近で指を広げる） */
+async function pinch(page, factor) {
+  await page.evaluate((factor) => {
+    const stage = document.querySelector('.crop-stage');
+    const f = document.querySelector('.crop-frame').getBoundingClientRect();
+    const cx = f.left + f.width / 2;
+    const cy = f.top + f.height / 3;
+    const d0 = 40;
+    const fire = (type, id, x, y) => stage.dispatchEvent(new PointerEvent(type, { pointerId: id, clientX: x, clientY: y, bubbles: true, pointerType: 'touch', isPrimary: id === 1 }));
+    fire('pointerdown', 1, cx - d0, cy);
+    fire('pointerdown', 2, cx + d0, cy);
+    for (let i = 1; i <= 10; i++) {
+      const d = d0 * (1 + ((factor - 1) * i) / 10);
+      fire('pointermove', 2, cx + d, cy);
+      fire('pointermove', 1, cx - d, cy);
+    }
+    fire('pointerup', 1, cx - d0 * factor, cy);
+    fire('pointerup', 2, cx + d0 * factor, cy);
+  }, factor);
+}
+
+let cropIds = {};
+await step('トリミング：アップロード直後に調整→ドラッグとピンチ→保存。一覧は切り抜き版、詳細は画像全体、元画像は不変', async () => {
+  await page.goto(`${BASE}#/edit/${ocId}`);
+  await page.locator('input[type=file][accept^="image"]').setInputFiles([fx('photo-rotated.jpg')]);
+  // OCで1枚だけ追加 → 自動でトリミング画面が開く
+  const dlg = page.getByRole('dialog', { name: 'サムネイルの調整' });
+  await dlg.waitFor({ timeout: 30000 });
+  await dlg.getByRole('button', { name: 'あとで' }).waitFor();
+  await page.locator('.crop-img').waitFor();
+  await page.waitForTimeout(200);
+  const r0 = await page.evaluate(() => {
+    const f = document.querySelector('.crop-frame').getBoundingClientRect();
+    const i = document.querySelector('.crop-img').getBoundingClientRect();
+    return { fw: f.width, fh: f.height, iw: i.width, ih: i.height, dy: i.top - f.top };
+  });
+  assert(Math.abs(r0.fw - r0.fh) < 1, '1:1の枠になっていない');
+  assert(Math.abs(r0.dy) < 1 && Math.abs(r0.iw - r0.fw) < 1, `縦長画像の初期位置が上端・幅ぴったりでない ${JSON.stringify(r0)}`);
+  await page.screenshot({ path: resolve(out, '13-crop-1x1.png') });
+  // 2本指で2倍に拡大 → 指1本で少し右下の部分へ移動
+  await pinch(page, 2);
+  const f = await page.locator('.crop-frame').boundingBox();
+  await page.mouse.move(f.x + f.width / 2, f.y + f.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(f.x + f.width / 2 - 40, f.y + f.height / 2 - 60, { steps: 8 });
+  await page.mouse.up();
+  await dlg.getByRole('button', { name: '決定' }).click();
+  await dlg.waitFor({ state: 'detached' });
+  const row = page.locator('.img-edit').last();
+  await row.getByRole('button', { name: /現在 1:1/ }).waitFor();
+  await row.getByRole('button', { name: '代表にする' }).click();
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.waitForURL(/#\/r\//);
+
+  let db = await readDb(page);
+  const rec = db.records.find((x) => x.id === ocId);
+  const ref = rec.images[rec.images.length - 1];
+  assert(ref.crop && ref.crop.aspect === '1:1', 'トリミング情報が保存されていない');
+  assert(rec.coverImageId === ref.id, '代表画像になっていない');
+  assert(ref.crop.w < 0.6 && ref.crop.w > 0.3, `ピンチで拡大した範囲になっていない w=${ref.crop.w}`);
+  assert(ref.crop.x > 0 && ref.crop.y > 0, `ドラッグで移動していない ${JSON.stringify(ref.crop)}`);
+  const info = db.cropInfo[ref.crop.id];
+  assert(info && info.width === 360 && info.height === 360 && info.sourceId === ref.id, `切り抜きサムネイルの寸法 ${JSON.stringify(info)}`);
+  const meta = db.images.find((m) => m.id === ref.id);
+  assert(db.fullHashes[ref.id] === meta.sha256, '元画像（保存用画像）が変わってしまった');
+  cropIds.first = ref.crop.id;
+  cropIds.imageId = ref.id;
+
+  // 詳細：画像全体（切り抜かない）を表示
+  const full = page.locator('.gallery-main .full-image img');
+  await full.waitFor();
+  const nat = await full.evaluate((im) => (im.complete ? { w: im.naturalWidth, h: im.naturalHeight } : new Promise((ok) => (im.onload = () => ok({ w: im.naturalWidth, h: im.naturalHeight })))));
+  assert(nat.w === 1200 && nat.h === 1600, `詳細の画像が全体でない ${JSON.stringify(nat)}`);
+  await page.screenshot({ path: resolve(out, '14-detail-full.png'), fullPage: true });
+
+  // 一覧：切り抜き版のサムネイル
+  await page.goto(`${BASE}#/c/oc`);
+  const card = page.locator('.card', { hasText: 'ミナ' }).first();
+  await card.locator('.thumb[data-cropped="1"] img').waitFor();
+  const tn = await card.locator('.thumb img').evaluate((im) => ({ w: im.naturalWidth, h: im.naturalHeight }));
+  assert(tn.w === 360 && tn.h === 360, `一覧のサムネイル寸法 ${JSON.stringify(tn)}`);
+  await page.screenshot({ path: resolve(out, '15-list-cropped.png'), fullPage: true });
+  results.push(`    切り抜き 1:1 → ${info.width}x${info.height} ${info.mime} ${(info.size / 1024).toFixed(1)}KB（保存用画像 ${(meta.size / 1024).toFixed(0)}KB・従来サムネイル ${(meta.thumbSize / 1024).toFixed(1)}KB）`);
+});
+
+await step('トリミングの再編集：前回の範囲で開き、3:4に変更。前の切り抜きは履歴用に残る', async () => {
+  await page.goto(`${BASE}#/edit/${ocId}`);
+  await page.locator('.img-edit').last().getByRole('button', { name: /現在 1:1/ }).click();
+  const dlg = page.getByRole('dialog', { name: 'サムネイルの調整' });
+  await dlg.getByRole('button', { name: 'やめる' }).waitFor();
+  await page.locator('.crop-img').waitFor();
+  await page.waitForTimeout(200);
+  // 前回の範囲が再現されている（拡大されている＝画像が枠より大きい、上端からずれている）
+  const g = await page.evaluate(() => {
+    const f = document.querySelector('.crop-frame').getBoundingClientRect();
+    const i = document.querySelector('.crop-img').getBoundingClientRect();
+    return { ratio: i.width / f.width, dy: i.top - f.top };
+  });
+  assert(g.ratio > 1.6 && g.dy < -1, `前回の範囲で開いていない ${JSON.stringify(g)}`);
+  await dlg.getByRole('button', { name: '縦長 3:4' }).click();
+  await page.waitForTimeout(200);
+  const box = await page.locator('.crop-frame').boundingBox();
+  assert(Math.abs(box.width / box.height - 0.75) < 0.01, '3:4の枠になっていない');
+  await page.screenshot({ path: resolve(out, '16-crop-3x4.png') });
+  await dlg.getByRole('button', { name: '決定' }).click();
+  await dlg.waitFor({ state: 'detached' });
+  await page.getByRole('button', { name: '保存', exact: true }).click();
+  await page.waitForURL(/#\/r\//);
+  const db = await readDb(page);
+  const ref = db.records.find((x) => x.id === ocId).images.find((i) => i.id === cropIds.imageId);
+  const info = db.cropInfo[ref.crop.id];
+  assert(ref.crop.aspect === '3:4' && info.width === 270 && info.height === 360, `3:4の切り抜き ${JSON.stringify(info)}`);
+  assert(db.cropHashes[cropIds.first], '前の切り抜きが消えている（履歴から戻せなくなる）');
+  cropIds.second = ref.crop.id;
+  await page.goto(`${BASE}#/c/oc`);
+  await page.locator('.card', { hasText: 'ミナ' }).first().locator('.thumb.tall img').waitFor();
+  await page.screenshot({ path: resolve(out, '17-list-3x4.png'), fullPage: true });
+  results.push(`    切り抜き 3:4 → ${info.width}x${info.height} ${(info.size / 1024).toFixed(1)}KB`);
+});
+
+await step('トリミング：履歴から戻すと1:1に戻り、「あとで」「やめる」では何も変わらない', async () => {
+  // やめる：変更なし
+  await page.goto(`${BASE}#/edit/${ocId}`);
+  await page.locator('.img-edit').last().getByRole('button', { name: /現在 3:4/ }).click();
+  await page.getByRole('dialog', { name: 'サムネイルの調整' }).getByRole('button', { name: 'やめる' }).click();
+  await page.locator('.img-edit').last().getByRole('button', { name: /現在 3:4/ }).waitFor();
+  assert((await page.getByText('変更なし').count()) === 1, '「やめる」で変更扱いになった');
+  // 履歴から1つ前（1:1）に戻す
+  await page.goto(`${BASE}#/history/${ocId}`);
+  await page.locator('.history-head').first().click();
+  await page.getByRole('button', { name: 'この版に戻す' }).click();
+  await page.getByRole('button', { name: 'この版に戻す' }).last().click();
+  await page.getByText('以前の版に戻しました').waitFor();
+  const db = await readDb(page);
+  const ref = db.records.find((x) => x.id === ocId).images.find((i) => i.id === cropIds.imageId);
+  assert(ref.crop.id === cropIds.first && ref.crop.aspect === '1:1', '履歴からトリミングが戻らない');
+});
+
 await step('ZIPバックアップの作成とダウンロード', async () => {
   await page.goto(`${BASE}#/backup`);
   await page.getByRole('button', { name: 'バックアップZIPを作成' }).click();
@@ -328,7 +475,7 @@ await step('ZIPバックアップの作成とダウンロード', async () => {
   await page.getByText('「ファイル」アプリで確認した').waitFor();
   await page.screenshot({ path: resolve(out, '10-backup.png'), fullPage: true });
   beforeBackup = await readDb(page);
-  assert(beforeBackup.images.length === 3, '画像数');
+  assert(beforeBackup.images.length === 4, '画像数');
 });
 
 await step('オフライン：アプリ起動・閲覧・編集・保存ができる', async () => {
@@ -378,12 +525,16 @@ await step('別の端末を想定：空のブラウザにZIPから復元し、�
   assert(after.records.length === beforeBackup.records.length, `記録数 ${after.records.length} != ${beforeBackup.records.length}`);
   assert(after.history.length === beforeBackup.history.length, '履歴数が違う');
   for (const [id, h] of Object.entries(beforeBackup.fullHashes)) assert(after.fullHashes[id] === h, `画像 ${id} が一致しない`);
+  assert(Object.keys(beforeBackup.cropHashes).length >= 2, '切り抜きがバックアップ前に無い');
+  for (const [id, h] of Object.entries(beforeBackup.cropHashes)) assert(after.cropHashes[id] === h, `切り抜き ${id} が一致しない`);
   for (const r of beforeBackup.records) {
     const x = after.records.find((y) => y.id === r.id);
     assert(x && JSON.stringify(x) === JSON.stringify(r), `記録 ${r.title} が一致しない`);
   }
   await p2.goto(`${BASE}#/r/${ocId}`);
   await p2.locator('.gallery-main img').waitFor();
+  await p2.goto(`${BASE}#/c/oc`);
+  await p2.locator('.card', { hasText: 'ミナ' }).first().locator('.thumb[data-cropped="1"] img').waitFor();
   await ctx2.close();
 });
 

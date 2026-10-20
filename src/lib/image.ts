@@ -1,4 +1,5 @@
-import type { ImageMeta } from '../db/types';
+import type { ImageCrop, ImageMeta } from '../db/types';
+import { cropTargetSize, rectToPixels, type CropAspect, type CropRect } from './crop';
 import type { StoredImageInput } from '../db/repo';
 import { sha256Hex, uuid } from './util';
 
@@ -196,6 +197,63 @@ export async function processImage(file: File, opts: ImageOptions): Promise<Stor
   } finally {
     if (full) releaseCanvas(full);
     if (thumb) releaseCanvas(thumb);
+    img.src = '';
+  }
+}
+
+// ---------- サムネイル用トリミング ----------
+
+/**
+ * 保存用画像（軽量化済み）から指定範囲を切り抜き、一覧用サムネイルを作る。
+ * 元の画像データには一切手を加えない。DBへの書き込みは呼び出し側で行う。
+ */
+export async function renderCropThumb(
+  source: { id: string; blob: Blob; mime: string },
+  rect: CropRect,
+  aspect: CropAspect,
+  opts: { maxEdge: number; quality: number },
+): Promise<ImageCrop> {
+  const img = await loadImage(source.blob, '画像');
+  let region: HTMLCanvasElement | null = null;
+  let out: HTMLCanvasElement | null = null;
+  try {
+    const W = img.naturalWidth;
+    const H = img.naturalHeight;
+    if (!W || !H) throw new ImageProcessError('画像', '画像の大きさを読み取れませんでした。');
+    const { sx, sy, sw, sh } = rectToPixels(rect, W, H);
+    region = document.createElement('canvas');
+    region.width = sw;
+    region.height = sh;
+    const ctx = region.getContext('2d');
+    if (!ctx) throw new Error('canvas');
+    ctx.drawImage(img, sx, sy, sw, sh, 0, 0, sw, sh);
+    // 出力は比率どおりの寸法にそろえる（範囲の端数で 270×359 のようにずれないように）。
+    // 切り抜き範囲が出力より小さいときは拡大しない（粗くなるだけなので）
+    const { tw, th } = cropTargetSize(sw, aspect, opts.maxEdge);
+    out = drawScaled(region, sw, sh, tw, th);
+    const hasAlpha = mayHaveAlpha(source.mime) ? canvasHasAlpha(out) : false;
+    const blob = await encode(out, hasAlpha, Math.min(0.85, opts.quality));
+    if (!blob || blob.size === 0) throw new ImageProcessError('画像', 'サムネイルの作成に失敗しました（メモリ不足の可能性があります）。');
+    const data = await blob.arrayBuffer();
+    return {
+      id: uuid(),
+      sourceId: source.id,
+      aspect,
+      ...rect,
+      mime: blob.type || 'image/jpeg',
+      width: tw,
+      height: th,
+      size: data.byteLength,
+      createdAt: Date.now(),
+      sha256: await sha256Hex(data),
+      data,
+    };
+  } catch (e) {
+    if (e instanceof ImageProcessError) throw e;
+    throw new ImageProcessError('画像', 'サムネイルの作成に失敗しました（メモリ不足の可能性があります）。');
+  } finally {
+    if (region) releaseCanvas(region);
+    if (out) releaseCanvas(out);
     img.src = '';
   }
 }

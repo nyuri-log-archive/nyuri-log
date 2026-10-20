@@ -3,13 +3,17 @@ import { z } from 'zod';
 import { getDB, DB_SCHEMA_VERSION } from '../db/db';
 import { toStorageError } from '../db/errors';
 import { getSettings, getState, updateState } from '../db/repo';
-import { DEFAULT_SETTINGS, type AppSettings, type HistoryEntry, type ImageMeta, type RecordItem } from '../db/types';
-import { historySchema, imageMetaSchema, recordSchema } from './schemas';
+import { DEFAULT_SETTINGS, type AppSettings, type HistoryEntry, type ImageCrop, type ImageMeta, type RecordItem } from '../db/types';
+import { cropMetaSchema, historySchema, imageMetaSchema, recordSchema } from './schemas';
 import { sha256Hex, uuid } from './util';
 
 export const BACKUP_FORMAT = 'nyuri-log-backup';
+/**
+ * 形式の版。v1.1で crops.json と切り抜きサムネイルを「追加」したが、無ければ従来どおり読めるため版は上げない
+ * （v1.0のアプリでも v1.1 のバックアップを復元でき、トリミング情報は無視されるだけ）。
+ */
 export const BACKUP_FORMAT_VERSION = 1;
-export const APP_VERSION = '1.0.0';
+export const APP_VERSION = '1.1.0';
 
 export interface ManifestFileEntry {
   sha256: string;
@@ -32,6 +36,9 @@ export interface BackupManifest {
     history: number;
     images: number;
     imagesInThisPart: number;
+    /** v1.1〜 */
+    crops?: number;
+    cropsInThisPart?: number;
   };
   files: Record<string, ManifestFileEntry>;
 }
@@ -65,11 +72,31 @@ function imageBytes(m: ImageMeta) {
   return m.size + m.thumbSize + (m.hasOriginal ? m.originalSize : 0);
 }
 
+function cropEntryName(c: Pick<ImageCrop, 'id' | 'mime'>) {
+  return `images/${c.id}.crop.${extOf(c.mime)}`;
+}
+
+/** 切り抜きサムネイルの情報（画像本体を除く） */
+export type CropMeta = Omit<ImageCrop, 'data'>;
+
+/** 切り抜きサムネイルの一覧を、本体を保持せずに読む */
+async function readCropMetas(): Promise<CropMeta[]> {
+  const out: CropMeta[] = [];
+  await getDB().imageCrop.each((c) => {
+    const { data: _d, ...meta } = c;
+    out.push(meta);
+  });
+  return out;
+}
+
 export interface BackupPlan {
   totalBytes: number;
   imageCount: number;
   recordCount: number;
   parts: string[][]; // パートごとの画像ID
+  /** パートごとの切り抜きサムネイルID（元画像と同じパートに入れる） */
+  cropParts: string[][];
+  cropCount: number;
   partLimitBytes: number;
 }
 
@@ -80,20 +107,35 @@ export async function planBackup(partLimitMB?: number): Promise<BackupPlan> {
   const limit = Math.max(20, partLimitMB ?? settings.splitBackupMB) * 1024 * 1024;
   const metas = await db.images.orderBy('createdAt').toArray();
   const recordCount = await db.records.count();
+  const crops = await readCropMetas();
+  const cropsBySource = new Map<string, CropMeta[]>();
+  for (const c of crops) cropsBySource.set(c.sourceId, [...(cropsBySource.get(c.sourceId) ?? []), c]);
   const parts: string[][] = [[]];
+  const cropParts: string[][] = [[]];
   let cur = 0;
   let total = 0;
   for (const m of metas) {
-    const b = imageBytes(m);
+    const own = cropsBySource.get(m.id) ?? [];
+    cropsBySource.delete(m.id);
+    const b = imageBytes(m) + own.reduce((n, c) => n + c.size, 0);
     total += b;
     if (cur > 0 && cur + b > limit) {
       parts.push([]);
+      cropParts.push([]);
       cur = 0;
     }
     parts[parts.length - 1].push(m.id);
+    cropParts[cropParts.length - 1].push(...own.map((c) => c.id));
     cur += b;
   }
-  return { totalBytes: total, imageCount: metas.length, recordCount, parts, partLimitBytes: limit };
+  // 元画像が無い切り抜き（通常は起きない）は最後のパートへ
+  for (const rest of cropsBySource.values()) {
+    for (const c of rest) {
+      total += c.size;
+      cropParts[cropParts.length - 1].push(c.id);
+    }
+  }
+  return { totalBytes: total, imageCount: metas.length, recordCount, parts, cropParts, cropCount: crops.length, partLimitBytes: limit };
 }
 
 function zipToBlob(build: (zip: Zip) => Promise<void>): Promise<Blob> {
@@ -147,6 +189,7 @@ export async function createBackup(opts: { partLimitMB?: number; onProgress?: (m
   const history = await db.history.toArray();
   const metas = await db.images.toArray();
   const metaById = new Map(metas.map((m) => [m.id, m]));
+  const cropMetas = await readCropMetas();
   const settings = await getSettings();
   const state = await getState();
   const backupId = uuid();
@@ -156,16 +199,19 @@ export async function createBackup(opts: { partLimitMB?: number; onProgress?: (m
 
   const recordsJson = strToU8(JSON.stringify({ records, history }));
   const imagesJson = strToU8(JSON.stringify(metas));
+  const cropsJson = strToU8(JSON.stringify(cropMetas));
   const settingsJson = strToU8(JSON.stringify({ settings, state: { lastBackupAt: state.lastBackupAt } }));
 
   for (let p = 0; p < partCount; p++) {
     const ids = plan.parts[p];
+    const cropIds = plan.cropParts[p] ?? [];
     opts.onProgress?.(partCount > 1 ? `バックアップを作成中（${p + 1}/${partCount}）…` : 'バックアップを作成中…');
     const files: Record<string, ManifestFileEntry> = {};
     const blob = await zipToBlob(async (zip) => {
       await addFile(zip, files, 'records.json', recordsJson, true);
       await addFile(zip, files, 'images.json', imagesJson, true);
       await addFile(zip, files, 'settings.json', settingsJson, true);
+      await addFile(zip, files, 'crops.json', cropsJson, true);
       for (const id of ids) {
         const m = metaById.get(id);
         if (!m) continue;
@@ -179,6 +225,10 @@ export async function createBackup(opts: { partLimitMB?: number; onProgress?: (m
           const orig = await db.imageOriginal.get(id);
           if (orig) await addFile(zip, files, names.original, new Uint8Array(orig.data), false);
         }
+      }
+      for (const id of cropIds) {
+        const c = await db.imageCrop.get(id);
+        if (c) await addFile(zip, files, cropEntryName(c), new Uint8Array(c.data), false);
       }
       const manifest: BackupManifest = {
         format: BACKUP_FORMAT,
@@ -196,6 +246,8 @@ export async function createBackup(opts: { partLimitMB?: number; onProgress?: (m
           history: history.length,
           images: metas.length,
           imagesInThisPart: ids.length,
+          crops: cropMetas.length,
+          cropsInThisPart: cropIds.length,
         },
         files,
       };
@@ -273,6 +325,8 @@ export interface ParsedBackup {
   settings: AppSettings | null;
   /** このパートに含まれる画像データ */
   images: Map<string, { full: Uint8Array; thumb: Uint8Array; original: Uint8Array | null }>;
+  /** このパートに含まれる切り抜きサムネイル（v1.1〜。古いバックアップでは空） */
+  crops: Map<string, ImageCrop>;
 }
 
 /** ZIPを読み、形式・版・チェックサムを検査する。問題があれば BackupError */
@@ -363,7 +417,21 @@ export async function parseBackupZip(fileName: string, data: Uint8Array): Promis
       });
     }
   }
-  return { fileName, manifest, records, history, imageMetas, settings, images };
+  // 切り抜きサムネイル（v1.1〜）。無い・壊れている場合は従来のサムネイルで表示されるだけなので、復元は止めない
+  const crops: ParsedBackup['crops'] = new Map();
+  if (manifest.files['crops.json']) {
+    const cj = z.array(z.unknown()).safeParse(readJson('crops.json'));
+    if (cj.success) {
+      for (const raw of cj.data) {
+        const c = cropMetaSchema.safeParse(raw);
+        if (!c.success) continue;
+        const name = cropEntryName(c.data);
+        if (!manifest.files[name] || !entries[name]) continue;
+        crops.set(c.data.id, { ...c.data, data: toArrayBuffer(entries[name]) });
+      }
+    }
+  }
+  return { fileName, manifest, records, history, imageMetas, settings, images, crops };
 }
 
 export interface RestorePlan {
@@ -383,6 +451,10 @@ export interface RestorePlan {
   existingImages: string[];
   /** 記録から参照されているのに、選んだファイルにも端末にも無い画像 */
   missingImages: string[];
+  crops: ParsedBackup['crops'];
+  newCrops: string[];
+  /** 見つからない切り抜きサムネイル（その画像は従来のサムネイルで表示される） */
+  missingCrops: string[];
   trashedCount: number;
 }
 
@@ -395,10 +467,13 @@ export async function buildRestorePlan(backups: ParsedBackup[]): Promise<Restore
   const parts = [...new Set(backups.map((b) => b.manifest.part))].sort((a, b) => a - b);
   const images: ParsedBackup['images'] = new Map();
   backups.forEach((b) => b.images.forEach((v, k) => images.set(k, v)));
+  const crops: ParsedBackup['crops'] = new Map();
+  backups.forEach((b) => b.crops.forEach((v, k) => crops.set(k, v)));
 
   const db = getDB();
   const existingRecords = new Map((await db.records.toArray()).map((r) => [r.id, r]));
   const existingImageIds = new Set(await db.images.toCollection().primaryKeys());
+  const existingCropIds = new Set(await db.imageCrop.toCollection().primaryKeys());
 
   const newRecords: RecordItem[] = [];
   const duplicateRecords: RestorePlan['duplicateRecords'] = [];
@@ -413,6 +488,12 @@ export async function buildRestorePlan(backups: ParsedBackup[]): Promise<Restore
   const newImages = [...images.keys()].filter((id) => !existingImageIds.has(id));
   const existingImages = [...images.keys()].filter((id) => existingImageIds.has(id));
   const missingImages = [...referenced].filter((id) => !images.has(id) && !existingImageIds.has(id));
+  const referencedCrops = new Set<string>();
+  const addCrops = (list: RecordItem['images']) => list.forEach((i) => i.crop?.id && referencedCrops.add(i.crop.id));
+  first.records.forEach((r) => addCrops(r.images));
+  first.history.forEach((h) => addCrops(h.snapshot.images));
+  const newCrops = [...crops.keys()].filter((id) => !existingCropIds.has(id));
+  const missingCrops = [...referencedCrops].filter((id) => !crops.has(id) && !existingCropIds.has(id));
 
   return {
     backups,
@@ -430,6 +511,9 @@ export async function buildRestorePlan(backups: ParsedBackup[]): Promise<Restore
     newImages,
     existingImages,
     missingImages,
+    crops,
+    newCrops,
+    missingCrops,
     trashedCount: first.records.filter((r) => r.deletedAt).length,
   };
 }
@@ -440,6 +524,7 @@ export interface RestoreResult {
   skippedRecords: number;
   addedImages: number;
   addedHistory: number;
+  addedCrops: number;
 }
 
 function toArrayBuffer(u: Uint8Array): ArrayBuffer {
@@ -467,8 +552,13 @@ export async function applyMergeRestore(plan: RestorePlan, duplicates: 'skip' | 
     .map((id) => ({ id, meta: metaById.get(id), data: plan.images.get(id) }))
     .filter((x): x is { id: string; meta: ImageMeta; data: NonNullable<typeof x.data> } => !!x.meta && !!x.data);
 
+  const cropRows = plan.newCrops.map((id) => plan.crops.get(id)).filter((c): c is ImageCrop => !!c);
+
   try {
-    await db.transaction('rw', [db.records, db.history, db.images, db.imageFull, db.imageThumb, db.imageOriginal, db.meta], async () => {
+    await db.transaction('rw', [db.records, db.history, db.images, db.imageFull, db.imageThumb, db.imageOriginal, db.imageCrop, db.meta], async () => {
+      for (const c of cropRows) {
+        if (!(await db.imageCrop.get(c.id))) await db.imageCrop.add(c);
+      }
       for (const row of imageRows) {
         if (await db.images.get(row.id)) continue;
         await db.images.add(row.meta);
@@ -493,6 +583,7 @@ export async function applyMergeRestore(plan: RestorePlan, duplicates: 'skip' | 
     skippedRecords: plan.duplicateRecords.length - copies.length,
     addedImages: imageRows.length,
     addedHistory: histories.length,
+    addedCrops: cropRows.length,
   };
 }
 
@@ -511,8 +602,9 @@ export async function applyReplaceRestore(plan: RestorePlan, opts: { restoreSett
     .filter((x): x is { id: string; data: typeof x.data; meta: ImageMeta } => !!x.meta);
   const prevState = await getState();
   try {
-    await db.transaction('rw', [db.records, db.history, db.images, db.imageFull, db.imageThumb, db.imageOriginal, db.drafts, db.meta], async () => {
-      await Promise.all([db.records.clear(), db.history.clear(), db.images.clear(), db.imageFull.clear(), db.imageThumb.clear(), db.imageOriginal.clear(), db.drafts.clear()]);
+    await db.transaction('rw', [db.records, db.history, db.images, db.imageFull, db.imageThumb, db.imageOriginal, db.imageCrop, db.drafts, db.meta], async () => {
+      await Promise.all([db.records.clear(), db.history.clear(), db.images.clear(), db.imageFull.clear(), db.imageThumb.clear(), db.imageOriginal.clear(), db.imageCrop.clear(), db.drafts.clear()]);
+      if (plan.crops.size) await db.imageCrop.bulkAdd([...plan.crops.values()]);
       for (const row of imageRows) {
         await db.images.add(row.meta);
         await db.imageFull.add({ id: row.id, data: toArrayBuffer(row.data.full) });
@@ -527,5 +619,5 @@ export async function applyReplaceRestore(plan: RestorePlan, opts: { restoreSett
   } catch (e) {
     throw toStorageError(e, '全置換の復元');
   }
-  return { addedRecords: plan.records.length, copiedRecords: 0, skippedRecords: 0, addedImages: imageRows.length, addedHistory: plan.history.length };
+  return { addedRecords: plan.records.length, copiedRecords: 0, skippedRecords: 0, addedImages: imageRows.length, addedHistory: plan.history.length, addedCrops: plan.crops.size };
 }

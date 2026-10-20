@@ -1,5 +1,5 @@
 import Dexie, { type Table } from 'dexie';
-import type { Draft, HistoryEntry, ImageData, ImageMeta, RecordItem, SettingRow } from './types';
+import type { Draft, HistoryEntry, ImageCrop, ImageData, ImageMeta, RecordItem, SettingRow } from './types';
 
 export const DB_NAME = 'nyuri-log';
 /**
@@ -7,7 +7,7 @@ export const DB_NAME = 'nyuri-log';
  * 構造を変えるときは version(n+1) を「追加」し、既存の version 定義は消さない。
  * upgrade() では既存データを変換・補完するだけにし、削除はしない（非破壊移行）。
  */
-export const DB_SCHEMA_VERSION = 1;
+export const DB_SCHEMA_VERSION = 2;
 
 export class NyuriDB extends Dexie {
   records!: Table<RecordItem, string>;
@@ -16,6 +16,7 @@ export class NyuriDB extends Dexie {
   imageFull!: Table<ImageData, string>;
   imageThumb!: Table<ImageData, string>;
   imageOriginal!: Table<ImageData, string>;
+  imageCrop!: Table<ImageCrop, string>;
   drafts!: Table<Draft, string>;
   meta!: Table<SettingRow, string>;
 
@@ -30,6 +31,10 @@ export class NyuriDB extends Dexie {
       imageOriginal: 'id',
       drafts: 'key',
       meta: 'key',
+    });
+    // v2（にゅりログ v1.1）：サムネイル用トリミング画像のテーブルを追加。既存データは変更しない
+    this.version(2).stores({
+      imageCrop: 'id, sourceId, createdAt',
     });
   }
 }
@@ -46,4 +51,4 @@ export function setDB(db: NyuriDB | null) {
   current = db;
 }
 
-export const ALL_TABLES = ['records', 'history', 'images', 'imageFull', 'imageThumb', 'imageOriginal', 'drafts', 'meta'] as const;
+export const ALL_TABLES = ['records', 'history', 'images', 'imageFull', 'imageThumb', 'imageOriginal', 'imageCrop', 'drafts', 'meta'] as const;

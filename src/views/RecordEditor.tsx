@@ -8,10 +8,15 @@ import { useSettings } from '../ui/hooks';
 import { goBack, navigate, setNavigationGuard } from '../ui/router';
 import { AutoTextarea, Field, TagInput, UrlListInput } from '../components/FormParts';
 import { Thumb } from '../components/Images';
+import { CropEditor } from '../components/CropEditor';
+import type { CropRef } from '../lib/crop';
 import { Icon } from '../components/Icon';
 import { useFeedback } from '../components/Feedback';
 
 type SaveState = 'idle' | 'saving' | 'saved' | 'error';
+
+/** アップロード直後にサムネイル調整を開くカテゴリー */
+const CROP_ON_UPLOAD: Category[] = ['oc', 'lora', 'nai'];
 
 interface DraftForm {
   record: RecordItem;
@@ -32,6 +37,7 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
   const [saveState, setSaveState] = useState<SaveState>('idle');
   const [saveError, setSaveError] = useState('');
   const [imgBusy, setImgBusy] = useState<string | null>(null);
+  const [cropTarget, setCropTarget] = useState<{ id: string; fromUpload: boolean } | null>(null);
   const [imgErrors, setImgErrors] = useState<string[]>([]);
   const [draftState, setDraftState] = useState<'none' | 'saved' | 'error'>('none');
 
@@ -142,6 +148,7 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
     const list = [...files];
     const errors: string[] = [];
     let added = 0;
+    const addedIds: string[] = [];
     for (let i = 0; i < list.length; i++) {
       setImgBusy(`画像を軽量化しています（${i + 1}/${list.length}）…`);
       try {
@@ -150,6 +157,7 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
         const ref: ImageRef = { id: processed.meta.id, caption: '' };
         setRec((r) => (r ? { ...r, images: [...r.images, ref], coverImageId: r.coverImageId ?? ref.id } : r));
         added++;
+        addedIds.push(ref.id);
       } catch (e) {
         errors.push(e instanceof ImageProcessError ? `${e.fileName}：${e.message}` : `${list[i].name}：${(e as Error).message}`);
       }
@@ -158,6 +166,27 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
     setImgErrors(errors);
     if (added) toast(`${added}枚の画像を追加しました（記録の「保存」で確定します）`, 'info');
     if (errors.length) toast(`${errors.length}枚の画像を追加できませんでした。入力内容はそのままです。`, 'error');
+    // OC・LoRA・NAIで1枚だけ追加したときは、続けてサムネイルの調整を開く（「あとで」で閉じられる）
+    const cat = recRef.current?.category;
+    if (addedIds.length === 1 && cat && CROP_ON_UPLOAD.includes(cat)) setCropTarget({ id: addedIds[0], fromUpload: true });
+  };
+
+  const applyCrop = (imageId: string, crop: CropRef | null) => {
+    setRec((r) =>
+      r
+        ? {
+            ...r,
+            images: r.images.map((x) => {
+              if (x.id !== imageId) return x;
+              const { crop: _old, ...rest } = x;
+              return crop ? { ...rest, crop } : rest;
+            }),
+          }
+        : r,
+    );
+    setSaveState((st) => (st === 'saved' ? 'idle' : st));
+    setCropTarget(null);
+    toast(crop ? 'サムネイルを調整しました（記録の「保存」で確定します）' : 'トリミングを解除しました（記録の「保存」で確定します）', 'info');
   };
 
   const moveImage = (i: number, d: -1 | 1) => {
@@ -261,7 +290,7 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
         <div className="img-edit-list">
           {rec.images.map((im, i) => (
             <div key={im.id} className={`img-edit ${rec.coverImageId === im.id ? 'is-cover' : ''}`}>
-              <Thumb id={im.id} category={rec.category} alt={im.caption || `画像${i + 1}`} small />
+              <Thumb img={im} category={rec.category} alt={im.caption || `画像${i + 1}`} small />
               <div className="img-edit-main">
                 <input value={im.caption} placeholder="説明（任意）" onChange={(e) => update({ images: rec.images.map((x) => (x.id === im.id ? { ...x, caption: e.target.value } : x)) })} aria-label={`画像${i + 1}の説明`} />
                 <div className="img-edit-actions">
@@ -272,6 +301,9 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
                   ))}
                 </div>
                 <div className="img-edit-actions">
+                  <button type="button" className={`chip tiny crop-chip ${im.crop ? 'on' : ''}`} onClick={() => setCropTarget({ id: im.id, fromUpload: false })} aria-label={`画像${i + 1}のサムネイルを調整${im.crop ? `（現在 ${im.crop.aspect}）` : ''}`}>
+                    ✂ {im.crop ? `サムネイル ${im.crop.aspect}` : 'サムネイル調整'}
+                  </button>
                   <button type="button" className={`chip tiny ${rec.coverImageId === im.id ? 'on' : ''}`} onClick={() => update({ coverImageId: im.id })}>
                     {rec.coverImageId === im.id ? '★ 代表画像' : '代表にする'}
                   </button>
@@ -370,6 +402,18 @@ export function RecordEditor({ id, newCategory }: { id?: string; newCategory?: C
           <br />
           入力内容は消えていません。もう一度「再試行」を押してください。
         </div>
+      )}
+      {cropTarget && (
+        <CropEditor
+          key={cropTarget.id}
+          imageId={cropTarget.id}
+          initial={rec.images.find((x) => x.id === cropTarget.id)?.crop}
+          maxEdge={settings.thumbMaxEdge}
+          quality={settings.imageQuality}
+          fromUpload={cropTarget.fromUpload}
+          onCancel={() => setCropTarget(null)}
+          onDone={(c) => applyCrop(cropTarget.id, c)}
+        />
       )}
     </div>
   );
