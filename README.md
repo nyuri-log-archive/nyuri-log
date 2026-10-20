@@ -68,25 +68,22 @@ npm run icons        # アイコン再生成（Python + Pillow が必要）
 
 ビルド結果（`dist/`）は静的ファイルだけなので、どこにでも置けます。既定では相対パス（`./`）でビルドするため、GitHub Pagesのサブパスでも独自ドメインでもそのまま動きます。
 
+### 現在の公開先
+
+- リポジトリ：`https://github.com/nyuri-log-archive/nyuri-log`（にゅりログ専用のGitHub Organization）
+- 公開URL：**`https://nyuri-log-archive.github.io/nyuri-log/`**
+
+他の自作アプリ（`nyuriwossan.github.io/…`）と**オリジンを分けて**保存領域を隔離するため、2026-10-21に専用Organizationへ移しました。**この組織には、にゅりログ以外のアプリを置かないでください。** 同じ組織に別のアプリを置くと、再び同じオリジンになります。
+
 ### A. GitHub Pages（GitHub Actionsで自動公開）
 
-1. GitHubで新しいリポジトリ `nyuri-log` を作成（既存のリポジトリは変更しません）。
-2. このフォルダの中身をプッシュ。
-   ```bash
-   git init && git add . && git commit -m "にゅりログ v1.0"
-   git branch -M main
-   git remote add origin https://github.com/nyuriwossan/nyuri-log.git
-   git push -u origin main
-   ```
-3. リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にする。
-4. 同梱の `.github/workflows/deploy.yml` が動き、テスト → ビルド → 公開まで自動で行います。
-5. 公開URL：`https://nyuriwossan.github.io/nyuri-log/`
+1. リポジトリの **Settings → Pages → Build and deployment → Source** を **GitHub Actions** にする。
+2. `main` へプッシュすると、同梱の `.github/workflows/deploy.yml` がテスト → ビルド → 公開まで自動で行います。
+3. 手動で公開し直したいときは **Actions → Deploy to GitHub Pages → Run workflow**。
 
-> ⚠ GitHub Pagesの既存ドメイン（`nyuriwossan.github.io`）配下に置くと、他の自作アプリと**同じオリジン**になります。次の「公開先とプライバシーの注意」を読んでから決めてください。
+### B. 別ホスト名で公開する（参考）
 
-### B. 別ホスト名で公開する（推奨候補）
-
-他のアプリとオリジンを分けたい場合は、無料で別ホスト名を持てるサービスに `dist/` を置きます。
+GitHub以外に置く場合は、無料で別ホスト名を持てるサービスに `dist/` を置きます。
 
 - **Cloudflare Pages**：GitHubリポジトリを連携 → Build command `npm run build`、Output directory `dist` → `https://nyuri-log.pages.dev` のようなURLになる
 - **Netlify**：同様に Build command `npm run build`、Publish directory `dist`
@@ -146,7 +143,7 @@ npm run icons        # アイコン再生成（Python + Pillow が必要）
 - **アプリの画面（プログラム）は公開されます。** GitHub Pagesに置くと、URLを知っている人は誰でもアプリを開けます。ただし開いた人の端末には**その人のデータしか**ありません。あなたの記録は、あなたのiPhoneの中にだけあります。
 - **リポジトリに個人データは入りません。** データはIndexedDB（端末内）に保存され、ソースコードにもビルド結果にも含まれません。秘密のAPIキーや認証トークンも埋め込んでいません。
 - **外部への通信はGitHub APIだけ**です（一括登録で公開リポジトリ一覧を取るとき。認証なし）。Content-Security-Policy で通信先を自分のサイトと `api.github.com` に制限しています。
-- **同一オリジンについて**：`nyuriwossan.github.io/nyuri-log/` と `nyuriwossan.github.io/他のアプリ/` は同じオリジンです。同じオリジン内のページは、互いのIndexedDBを技術的には読めます。自作アプリだけなら実害は小さいですが、他のアプリで外部スクリプトを読み込んでいる場合などに備え、別ホスト名（上記B）での公開も選べるようにしています。
+- **オリジンの分離**：同じオリジン（例：`nyuriwossan.github.io` 配下）のページ同士は、互いのIndexedDB・キャッシュ・保存容量を共有し、技術的には読み書きや削除もできます。そのため、にゅりログは専用Organization（`nyuri-log-archive.github.io`）で公開し、他の自作アプリから隔離しています。
 - **バックアップZIPは暗号化されていません。** パスワード・個人情報などの秘密情報を保存する用途には向きません。ZIPの保管場所（iCloud Driveなど）の安全性に依存します。
 
 ---
