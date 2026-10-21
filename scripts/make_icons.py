@@ -1,32 +1,38 @@
-"""ホーム画面用アイコンを生成する（Pillowが必要）。python3 scripts/make_icons.py"""
-from PIL import Image, ImageDraw
+"""ホーム画面用アイコンを生成する（Pillowが必要）。python3 scripts/make_icons.py
+
+元画像: scripts/icon-master-1024.png（1024x1024・不透明）を縮小するだけで、描き直しや角丸加工はしない。
+maskable版だけは、Androidの円形マスクで図柄が欠けないよう、同じ画像を縮めて背景色の上に置く。
+"""
+from PIL import Image
 import os
 
-OUT = os.path.join(os.path.dirname(__file__), '..', 'public', 'icons')
+HERE = os.path.dirname(__file__)
+MASTER = os.path.join(HERE, 'icon-master-1024.png')
+OUT = os.path.join(HERE, '..', 'public', 'icons')
 os.makedirs(OUT, exist_ok=True)
 
-def draw(size, maskable=False):
-    s = size / 512
-    img = Image.new('RGBA', (size, size), (255, 253, 247, 255))
-    d = ImageDraw.Draw(img)
-    inset = 70 if maskable else 0
-    def R(x0, y0, x1, y1):
-        k = (512 - 2 * inset) / 512
-        return [ (inset + x0 * k) * s, (inset + y0 * k) * s, (inset + x1 * k) * s, (inset + y1 * k) * s ]
-    # 重なった付箋（ラベンダー・グリーン・イエロー）
-    d.rounded_rectangle(R(150, 92, 420, 362), radius=26*s, fill=(221, 214, 247))
-    d.rounded_rectangle(R(118, 124, 388, 394), radius=26*s, fill=(205, 236, 214))
-    d.rounded_rectangle(R(86, 156, 356, 426), radius=26*s, fill=(255, 240, 168))
-    # 罫線
-    for i, y in enumerate((236, 284, 332)):
-        w = 220 if i < 2 else 150
-        d.rounded_rectangle(R(126, y, 126 + w, y + 14), radius=7*s, fill=(196, 170, 120))
-    # ピンクのしおり
-    d.polygon([tuple(R(300, 156, 0, 0)[:2]), tuple(R(336, 156, 0, 0)[:2]), tuple(R(336, 214, 0, 0)[:2]), tuple(R(318, 198, 0, 0)[:2]), tuple(R(300, 214, 0, 0)[:2])], fill=(247, 182, 201))
-    return img
+# 元画像の背景色（四隅・辺の中央のサンプル値がほぼ一定）
+BG = (252, 106, 121)
+# maskable: 図柄の最遠点が安全領域（直径80%の円）に収まる縮小率
+MASKABLE_SCALE = 0.84
 
-draw(192).save(os.path.join(OUT, 'icon-192.png'))
-draw(512).save(os.path.join(OUT, 'icon-512.png'))
-draw(512, maskable=True).save(os.path.join(OUT, 'icon-maskable-512.png'))
-draw(180).convert('RGB').save(os.path.join(OUT, 'apple-touch-icon.png'))
+master = Image.open(MASTER).convert('RGB')
+
+
+def plain(size):
+    return master.resize((size, size), Image.LANCZOS)
+
+
+def maskable(size):
+    canvas = Image.new('RGB', (size, size), BG)
+    inner = round(size * MASKABLE_SCALE)
+    offset = (size - inner) // 2
+    canvas.paste(master.resize((inner, inner), Image.LANCZOS), (offset, offset))
+    return canvas
+
+
+plain(192).save(os.path.join(OUT, 'icon-192.png'), optimize=True)
+plain(512).save(os.path.join(OUT, 'icon-512.png'), optimize=True)
+maskable(512).save(os.path.join(OUT, 'icon-maskable-512.png'), optimize=True)
+plain(180).save(os.path.join(OUT, 'apple-touch-icon.png'), optimize=True)
 print('icons written to', os.path.abspath(OUT))
